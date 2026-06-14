@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Movie Poster Wall - By Gemi</title>
+    <!-- Tambahan library untuk fitur export gambar -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.11/html-to-image.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            background-color: #050505;
+            color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow-x: hidden;
+        }
+        #controls {
+            position: fixed;
+            top: 0;
+            left: 0;
+            background: rgba(20, 20, 20, 0.95);
+            padding: 20px;
+            border-bottom-right-radius: 12px;
+            z-index: 100;
+            box-shadow: 2px 2px 15px rgba(0,0,0,0.8);
+            max-width: 280px;
+            backdrop-filter: blur(5px);
+        }
+        .control-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            font-size: 13px;
+            margin-bottom: 6px;
+            color: #ccc;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            color: white;
+            border-radius: 6px;
+            box-sizing: border-box;
+            outline: none;
+        }
+        input[type="text"]:focus {
+            border-color: #e50914;
+        }
+        input[type="range"] {
+            width: 100%;
+            cursor: pointer;
+        }
+        button {
+            width: 100%;
+            padding: 12px;
+            background: #e50914;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        button:hover {
+            background: #b20710;
+        }
+        #scene {
+            width: 100vw;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            perspective: 1200px;
+            padding-left: 300px; /* Ruang untuk panel kontrol di desktop */
+            padding-top: 50px;
+            padding-bottom: 50px;
+            box-sizing: border-box;
+        }
+        #wall {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            justify-content: center;
+            transform-style: preserve-3d;
+            transition: transform 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
+            max-width: 1300px;
+        }
+        .poster {
+            background-color: #111;
+            border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+            object-fit: cover;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        .poster:hover {
+            transform: scale(1.08) translateZ(30px) !important;
+            box-shadow: 0 20px 40px rgba(0,0,0,1), 0 0 15px rgba(229, 9, 20, 0.3);
+            z-index: 10;
+            cursor: pointer;
+        }
+        .message {
+            color: #888;
+            font-size: 1.2rem;
+            text-align: center;
+        }
+        .loading {
+            animation: pulse 1.5s infinite;
+        }
+        .error {
+            color: #e50914;
+        }
+        @keyframes pulse {
+            0% { opacity: 0.5; }
+            50% { opacity: 1; }
+            100% { opacity: 0.5; }
+        }
+        
+        /* Notifikasi kustom pengganti alert */
+        #notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background-color: #e50914;
+            color: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            z-index: 1000;
+            opacity: 0;
+            transform: translateY(-20px);
+            transition: opacity 0.3s, transform 0.3s;
+            pointer-events: none;
+            font-weight: bold;
+        }
+        #notification.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        /* Responsif untuk layar kecil */
+        @media (max-width: 768px) {
+            #controls {
+                position: relative;
+                max-width: 100%;
+                border-radius: 0;
+            }
+            #scene {
+                padding-left: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<div id="notification">Pesan Notifikasi</div>
+
+<div id="controls">
+    <div class="control-group">
+        <label>TMDB API Key</label>
+        <input type="text" id="apiKey" placeholder="Masukkan API Key TMDB v3">
+    </div>
+    <div class="control-group">
+        <label>Kata Kunci (Film/Series)</label>
+        <input type="text" id="keyword" placeholder="Kosongkan untuk Populer">
+    </div>
+    <div class="control-group">
+        <label>Jumlah Poster: <span id="countVal">14</span></label>
+        <input type="range" id="posterCount" min="4" max="40" value="14">
+    </div>
+    <div class="control-group">
+        <label>Lebar Poster (px): <span id="widthVal">180</span></label>
+        <input type="range" id="posterWidth" min="100" max="350" value="180">
+    </div>
+    <div class="control-group">
+        <label>Rasio (Tinggi/Lebar): <span id="ratioVal">1.5</span></label>
+        <input type="range" id="posterRatio" min="1.0" max="2.0" step="0.05" value="1.5">
+    </div>
+    <div class="control-group">
+        <label>Tilt Vertikal (Rotasi X): <span id="rotXVal">10</span>°</label>
+        <input type="range" id="rotX" min="-45" max="45" value="10">
+    </div>
+    <div class="control-group">
+        <label>Tilt Horizontal (Rotasi Y): <span id="rotYVal">-15</span>°</label>
+        <input type="range" id="rotY" min="-60" max="60" value="-15">
+    </div>
+    <div class="control-group">
+        <label>Kedalaman 3D (Perspektif): <span id="perspVal">1200</span></label>
+        <input type="range" id="perspective" min="500" max="3000" value="1200">
+    </div>
+    <button id="generateBtn" style="margin-bottom: 10px;">Buat Dinding Poster</button>
+    <button id="exportBtn" style="background: #0056b3;">Export Gambar (1920x1080)</button>
+</div>
+
+<div id="scene">
+    <div id="wall">
+        <div class="message">Masukkan API Key TMDB lalu klik "Buat Dinding Poster"</div>
+    </div>
+</div>
+
+<script>
+    const DOM = {
+        apiKey: document.getElementById('apiKey'),
+        keyword: document.getElementById('keyword'),
+        posterCount: document.getElementById('posterCount'),
+        posterWidth: document.getElementById('posterWidth'),
+        posterRatio: document.getElementById('posterRatio'),
+        rotX: document.getElementById('rotX'),
+        rotY: document.getElementById('rotY'),
+        perspective: document.getElementById('perspective'),
+        generateBtn: document.getElementById('generateBtn'),
+        exportBtn: document.getElementById('exportBtn'),
+        wall: document.getElementById('wall'),
+        scene: document.getElementById('scene'),
+        notification: document.getElementById('notification')
+    };
+
+    let notifTimeout;
+
+    // Fungsi notifikasi kustom pengganti alert()
+    const showNotification = (msg) => {
+        DOM.notification.innerText = msg;
+        DOM.notification.classList.add('show');
+        clearTimeout(notifTimeout);
+        notifTimeout = setTimeout(() => {
+            DOM.notification.classList.remove('show');
+        }, 3000);
+    };
+
+    // Fungsi untuk memperbarui angka di label slider
+    const updateLabels = () => {
+        document.getElementById('countVal').innerText = DOM.posterCount.value;
+        document.getElementById('widthVal').innerText = DOM.posterWidth.value;
+        document.getElementById('ratioVal').innerText = DOM.posterRatio.value;
+        document.getElementById('rotXVal').innerText = DOM.rotX.value;
+        document.getElementById('rotYVal').innerText = DOM.rotY.value;
+        document.getElementById('perspVal').innerText = DOM.perspective.value;
+    };
+
+    // Fungsi untuk mengaplikasikan efek dinding 3D
+    const applyTransform = () => {
+        DOM.scene.style.perspective = `${DOM.perspective.value}px`;
+        DOM.wall.style.transform = `rotateX(${DOM.rotX.value}deg) rotateY(${DOM.rotY.value}deg)`;
+    };
+
+    // Menambahkan Event Listener ke semua slider
+    ['posterCount', 'posterWidth', 'posterRatio', 'rotX', 'rotY', 'perspective'].forEach(id => {
+        document.getElementById(id).addEventListener('input', () => {
+            updateLabels();
+            applyTransform();
+            updatePosterSizes();
+        });
+    });
+
+    // Fungsi *real-time* mengubah ukuran poster tanpa harus fetch ulang
+    const updatePosterSizes = () => {
+        const width = DOM.posterWidth.value;
+        const height = width * DOM.posterRatio.value;
+        document.querySelectorAll('.poster').forEach(img => {
+            img.style.width = `${width}px`;
+            img.style.height = `${height}px`;
+        });
+    };
+
+    // Fungsi pencarian pintar (berdasarkan makna/tema/studio)
+    const getSmartUrl = async (key, keyword) => {
+        if (!keyword) return `https://api.themoviedb.org/3/movie/popular?api_key=${key}&language=en-US&page=1`;
+        
+        const lowKey = keyword.toLowerCase();
+        
+        // 1. Cek Studio / Provider spesifik (seperti permintaan "Netflix Originals")
+        if (lowKey.includes('netflix')) return `https://api.themoviedb.org/3/discover/movie?api_key=${key}&language=en-US&sort_by=popularity.desc&with_watch_providers=8&watch_region=US`;
+        if (lowKey.includes('marvel')) return `https://api.themoviedb.org/3/discover/movie?api_key=${key}&language=en-US&sort_by=popularity.desc&with_companies=420`;
+        if (lowKey.includes('disney')) return `https://api.themoviedb.org/3/discover/movie?api_key=${key}&language=en-US&sort_by=popularity.desc&with_companies=2`;
+        if (lowKey.includes('hbo')) return `https://api.themoviedb.org/3/discover/tv?api_key=${key}&language=en-US&sort_by=popularity.desc&with_networks=49`;
+
+        // 2. Cek sebagai Tema/Keyword (Misal: "zombie", "space", "vampire")
+        try {
+            const kwRes = await fetch(`https://api.themoviedb.org/3/search/keyword?api_key=${key}&query=${encodeURIComponent(keyword)}`);
+            const kwData = await kwRes.json();
+            if (kwData.results && kwData.results.length > 0) {
+                // Ambil ID dari makna keyword yang terdeteksi
+                const kwId = kwData.results[0].id;
+                return `https://api.themoviedb.org/3/discover/movie?api_key=${key}&language=en-US&sort_by=popularity.desc&with_keywords=${kwId}`;
+            }
+        } catch (e) { console.error("Pencarian keyword gagal", e); }
+
+        // 3. Fallback: Cari nama judul langsung jika maknanya tidak terdeteksi
+        return `https://api.themoviedb.org/3/search/multi?api_key=${key}&query=${encodeURIComponent(keyword)}&language=en-US&page=1`;
+    };
+
+    // Logika utama untuk menarik data dari TMDB
+    DOM.generateBtn.addEventListener('click', async () => {
+        const key = DOM.apiKey.value.trim();
+        const searchKeyword = DOM.keyword.value.trim();
+
+        if (!key) {
+            showNotification('Tolong masukkan API Key TMDB terlebih dahulu ya!');
+            return;
+        }
+
+        DOM.wall.innerHTML = '<div class="message loading">Memanggil data dari TMDB...</div>';
+
+        try {
+            // Menggunakan fungsi URL pintar
+            const url = await getSmartUrl(key, searchKeyword);
+
+            const res = await fetch(url);
+            const data = await res.json();
+
+            if (data.status_code === 7 || data.success === false) {
+                showNotification('API Key TMDB tidak valid atau kadaluarsa.');
+                DOM.wall.innerHTML = '<div class="message error">Gagal memuat. Periksa API Key Anda.</div>';
+                return;
+            }
+
+            DOM.wall.innerHTML = ''; // Bersihkan dinding
+            
+            // Filter data agar hanya mengambil hasil yang memiliki gambar poster
+            const movies = data.results.filter(item => item.poster_path);
+
+            if (movies.length === 0) {
+                DOM.wall.innerHTML = `<div class="message error">Tidak ada poster ditemukan untuk keyword "${searchKeyword}".</div>`;
+                return;
+            }
+
+            const count = parseInt(DOM.posterCount.value);
+            const width = DOM.posterWidth.value;
+            const height = width * DOM.posterRatio.value;
+
+            // Jika jumlah yang diminta lebih banyak dari 20 (batas 1 halaman API), kita loop datanya
+            const displayMovies = [];
+            for(let i=0; i < count; i++) {
+                displayMovies.push(movies[i % movies.length]);
+            }
+
+            // Membuat elemen gambar untuk setiap film
+            displayMovies.forEach((movie, index) => {
+                if (movie.poster_path) {
+                    const img = document.createElement('img');
+                    img.crossOrigin = 'anonymous'; // FIX: Menambahkan Cross-Origin untuk menghindari error tainted canvas saat export
+                    img.src = `https://image.tmdb.org/t/p/w500${movie.poster_path}`;
+                    img.className = 'poster';
+                    img.style.width = `${width}px`;
+                    img.style.height = `${height}px`;
+                    img.alt = movie.title || movie.name; // Mendukung series yang memakai "name" alih-alih "title"
+                    img.title = movie.title || movie.name;
+                    DOM.wall.appendChild(img);
+                }
+            });
+
+        } catch (err) {
+            console.error(err);
+            showNotification('Gagal mengambil data. Pastikan internet lancar.');
+            DOM.wall.innerHTML = '<div class="message error">Terjadi kesalahan saat memuat data.</div>';
+        }
+    });
+
+    // Fitur Export Gambar ke Resolusi HD (1920x1080)
+    DOM.exportBtn.addEventListener('click', async () => {
+        showNotification('Memproses gambar HD (1920x1080), mohon tunggu...');
+        
+        // Simpan styling asli
+        const originalWidth = DOM.scene.style.width;
+        const originalHeight = DOM.scene.style.height;
+        const originalPadding = DOM.scene.style.paddingLeft;
+        
+        // Setup ukuran scene sementara menjadi persis 1920x1080 (Landscape)
+        DOM.scene.style.width = '1920px';
+        DOM.scene.style.height = '1080px';
+        DOM.scene.style.paddingLeft = '0'; // Hilangkan jarak menu kontrol
+        DOM.scene.style.minHeight = 'unset';
+
+        try {
+            // Render elemen scene 3D menjadi gambar format JPEG
+            const dataUrl = await htmlToImage.toJpeg(DOM.scene, { 
+                quality: 0.95,
+                width: 1920,
+                height: 1080,
+                backgroundColor: '#050505',
+                style: { transform: 'scale(1)' },
+                pixelRatio: 1 // FIX: Memastikan rasio pixel tepat agar ukurannya tidak berubah di layar beresolusi tinggi (Retina)
+            });
+
+            // Kembalikan ke styling asli
+            DOM.scene.style.width = originalWidth;
+            DOM.scene.style.height = originalHeight;
+            DOM.scene.style.paddingLeft = originalPadding;
+            DOM.scene.style.minHeight = '100vh';
+
+            // Trigger file download
+            const link = document.createElement('a');
+            link.download = `CineWall-${DOM.keyword.value || 'Popular'}.jpg`;
+            link.href = dataUrl;
+            link.click();
+            
+            showNotification('Gambar berhasil diexport!');
+        } catch (error) {
+            console.error('Error saat export:', error);
+            showNotification('Gagal mengexport gambar. Pastikan gambar sudah dimuat sepenuhnya.');
+            
+            // Pastikan styling dikembalikan meski terjadi error
+            DOM.scene.style.width = originalWidth;
+            DOM.scene.style.height = originalHeight;
+            DOM.scene.style.paddingLeft = originalPadding;
+            DOM.scene.style.minHeight = '100vh';
+        }
+    });
+
+    // Inisialisasi awal saat pertama dibuka
+    updateLabels();
+    applyTransform();
+</script>
+</body>
+</html>
