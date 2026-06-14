@@ -25,7 +25,13 @@
             box-shadow: 2px 2px 15px rgba(0,0,0,0.8);
             max-width: 280px;
             backdrop-filter: blur(5px);
+            max-height: 100vh;
+            overflow-y: auto;
         }
+        /* Styling untuk scrollbar di panel kontrol */
+        #controls::-webkit-scrollbar { width: 6px; }
+        #controls::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
+
         .control-group {
             margin-bottom: 15px;
         }
@@ -35,7 +41,7 @@
             margin-bottom: 6px;
             color: #ccc;
         }
-        input[type="text"] {
+        input[type="text"], input[type="password"] {
             width: 100%;
             padding: 10px;
             background: #1a1a1a;
@@ -45,7 +51,7 @@
             box-sizing: border-box;
             outline: none;
         }
-        input[type="text"]:focus {
+        input[type="text"]:focus, input[type="password"]:focus {
             border-color: #e50914;
         }
         input[type="range"] {
@@ -105,12 +111,24 @@
             color: #888;
             font-size: 1.2rem;
             text-align: center;
+            max-width: 600px;
+            line-height: 1.5;
         }
         .loading {
             animation: pulse 1.5s infinite;
         }
         .error {
             color: #e50914;
+        }
+        .ai-badge {
+            display: inline-block;
+            background: linear-gradient(45deg, #4285f4, #9b72cb, #d96570);
+            color: white;
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 10px;
+            margin-left: 5px;
+            vertical-align: middle;
         }
         @keyframes pulse {
             0% { opacity: 0.5; }
@@ -160,11 +178,15 @@
 <div id="controls">
     <div class="control-group">
         <label>TMDB API Key</label>
-        <input type="text" id="apiKey" placeholder="Masukkan API Key TMDB v3">
+        <input type="password" id="apiKey" placeholder="Masukkan API Key TMDB v3">
     </div>
     <div class="control-group">
-        <label>Kata Kunci (Film/Series)</label>
-        <input type="text" id="keyword" placeholder="Kosongkan untuk Populer">
+        <label>Gemini API Key <span class="ai-badge">AI</span></label>
+        <input type="password" id="geminiKey" placeholder="Kosongkan jika di dalam Canvas">
+    </div>
+    <div class="control-group">
+        <label>Pencarian Pintar AI (Prompt)</label>
+        <input type="text" id="keyword" placeholder="Contoh: Film plot twist tahun 2000an">
     </div>
     <div class="control-group">
         <label>Jumlah Poster: <span id="countVal">14</span></label>
@@ -196,13 +218,16 @@
 
 <div id="scene">
     <div id="wall">
-        <div class="message">Masukkan API Key TMDB lalu klik "Buat Dinding Poster"</div>
+        <div class="message">Masukkan API Key TMDB, lalu ketik ide film apa saja yang ingin kamu lihat!</div>
     </div>
 </div>
 
 <script>
+    const apiKey = ""; // Akan terisi otomatis oleh environment Canvas
+
     const DOM = {
         apiKey: document.getElementById('apiKey'),
+        geminiKey: document.getElementById('geminiKey'),
         keyword: document.getElementById('keyword'),
         posterCount: document.getElementById('posterCount'),
         posterWidth: document.getElementById('posterWidth'),
@@ -264,88 +289,180 @@
         });
     };
 
-    // Fungsi pencarian pintar (berdasarkan makna/tema/studio)
+    // Fungsi Exponential Backoff untuk menangani limit API
+    async function fetchWithBackoff(url, options = {}) {
+        const delays = [1000, 2000, 4000, 8000, 16000];
+        let lastError;
+        for (let i = 0; i <= delays.length; i++) {
+            try {
+                const response = await fetch(url, options);
+                if (!response.ok) {
+                    throw new Error(`HTTP Error: ${response.status}`);
+                }
+                return response;
+            } catch (error) {
+                lastError = error;
+                // Jangan lakukan retry jika errornya adalah Client Error yang fatal (400, 403, 404)
+                if (error.message.includes('400') || error.message.includes('403') || error.message.includes('404')) {
+                    throw error;
+                }
+                if (i < delays.length) {
+                    await new Promise(resolve => setTimeout(resolve, delays[i]));
+                }
+            }
+        }
+        throw lastError;
+    }
+
+    // Fallback lama (Jika Gemini gagal/tidak ada API)
     const getSmartUrl = async (key, keyword) => {
         if (!keyword) return `https://api.themoviedb.org/3/movie/popular?api_key=${key}&language=en-US&page=1`;
-        
         const lowKey = keyword.toLowerCase();
-        
-        // 1. Cek Studio / Provider spesifik (seperti permintaan "Netflix Originals")
         if (lowKey.includes('netflix')) return `https://api.themoviedb.org/3/discover/movie?api_key=${key}&language=en-US&sort_by=popularity.desc&with_watch_providers=8&watch_region=US`;
         if (lowKey.includes('marvel')) return `https://api.themoviedb.org/3/discover/movie?api_key=${key}&language=en-US&sort_by=popularity.desc&with_companies=420`;
-        if (lowKey.includes('disney')) return `https://api.themoviedb.org/3/discover/movie?api_key=${key}&language=en-US&sort_by=popularity.desc&with_companies=2`;
-        if (lowKey.includes('hbo')) return `https://api.themoviedb.org/3/discover/tv?api_key=${key}&language=en-US&sort_by=popularity.desc&with_networks=49`;
-
-        // 2. Cek sebagai Tema/Keyword (Misal: "zombie", "space", "vampire")
-        try {
-            const kwRes = await fetch(`https://api.themoviedb.org/3/search/keyword?api_key=${key}&query=${encodeURIComponent(keyword)}`);
-            const kwData = await kwRes.json();
-            if (kwData.results && kwData.results.length > 0) {
-                // Ambil ID dari makna keyword yang terdeteksi
-                const kwId = kwData.results[0].id;
-                return `https://api.themoviedb.org/3/discover/movie?api_key=${key}&language=en-US&sort_by=popularity.desc&with_keywords=${kwId}`;
-            }
-        } catch (e) { console.error("Pencarian keyword gagal", e); }
-
-        // 3. Fallback: Cari nama judul langsung jika maknanya tidak terdeteksi
         return `https://api.themoviedb.org/3/search/multi?api_key=${key}&query=${encodeURIComponent(keyword)}&language=en-US&page=1`;
     };
 
-    // Logika utama untuk menarik data dari TMDB
+    // Logika utama untuk menarik data 
     DOM.generateBtn.addEventListener('click', async () => {
-        const key = DOM.apiKey.value.trim();
+        const tmdbKey = DOM.apiKey.value.trim();
         const searchKeyword = DOM.keyword.value.trim();
+        const finalGeminiKey = DOM.geminiKey.value.trim() || apiKey;
 
-        if (!key) {
+        if (!tmdbKey) {
             showNotification('Tolong masukkan API Key TMDB terlebih dahulu ya!');
             return;
         }
 
-        DOM.wall.innerHTML = '<div class="message loading">Memanggil data dari TMDB...</div>';
+        const count = parseInt(DOM.posterCount.value);
+        let finalMovies = [];
+
+        DOM.wall.innerHTML = '<div class="message loading">Memproses permintaanmu...</div>';
 
         try {
-            // Menggunakan fungsi URL pintar
-            const url = await getSmartUrl(key, searchKeyword);
+            // JIKA ada keyword dan API Key Gemini, gunakan AI!
+            if (searchKeyword && finalGeminiKey) {
+                DOM.wall.innerHTML = `<div class="message loading">Gemini AI sedang mencari rekomendasi untuk:<br>"${searchKeyword}"...</div>`;
+                
+                try {
+                    const prompt = `Kamu adalah sistem rekomendasi film. Berikan daftar judul film atau TV series yang cocok dengan deskripsi berikut: "${searchKeyword}". Berikan setidaknya ${count + 5} judul paling relevan.`;
+                    
+                    const payload = {
+                        contents: [{ parts: [{ text: prompt }] }],
+                        generationConfig: {
+                            responseMimeType: "application/json",
+                            responseSchema: {
+                                type: "OBJECT",
+                                properties: {
+                                    titles: { type: "ARRAY", items: { type: "STRING" } }
+                                }
+                            }
+                        }
+                    };
 
-            const res = await fetch(url);
-            const data = await res.json();
+                    let geminiRes;
+                    let aiSuccess = false;
+                    let lastAiErr;
 
-            if (data.status_code === 7 || data.success === false) {
-                showNotification('API Key TMDB tidak valid atau kadaluarsa.');
-                DOM.wall.innerHTML = '<div class="message error">Gagal memuat. Periksa API Key Anda.</div>';
+                    // Fallback berantai jika model utama mengembalikan 404
+                    const geminiModels = [
+                        "gemini-2.5-flash-preview-09-2025",
+                        "gemini-2.5-flash",
+                        "gemini-1.5-flash"
+                    ];
+
+                    for (const model of geminiModels) {
+                        try {
+                            const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${finalGeminiKey}`;
+                            geminiRes = await fetchWithBackoff(geminiUrl, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(payload)
+                            });
+                            aiSuccess = true;
+                            break; // Berhasil, keluar dari loop
+                        } catch (err) {
+                            lastAiErr = err;
+                            console.warn(`Model ${model} failed: ${err.message}`);
+                        }
+                    }
+
+                    if (!aiSuccess) throw lastAiErr;
+
+                    const geminiData = await geminiRes.json();
+                    
+                    // Ekstrak hasil JSON dari Gemini
+                    const jsonText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
+                    if (jsonText) {
+                        const parsedData = JSON.parse(jsonText);
+                        const titles = parsedData.titles || [];
+
+                        DOM.wall.innerHTML = '<div class="message loading">Menarik poster film dari TMDB...</div>';
+
+                        // Melakukan pencarian TMDB satu-satu berdasarkan judul rekomendasi AI
+                        for (const title of titles) {
+                            try {
+                                const tmdbRes = await fetchWithBackoff(`https://api.themoviedb.org/3/search/multi?api_key=${tmdbKey}&query=${encodeURIComponent(title)}&language=en-US&page=1`);
+                                const tmdbData = await tmdbRes.json();
+                                
+                                // Ambil hasil pertama yang punya gambar poster
+                                const validMovie = tmdbData.results?.find(item => item.poster_path);
+                                
+                                if (validMovie && !finalMovies.find(m => m.id === validMovie.id)) {
+                                    finalMovies.push(validMovie);
+                                }
+                                if (finalMovies.length >= count) break; // Berhenti jika poster sudah mencukupi
+                            } catch (tmdbErr) {
+                                // Abaikan error individual TMDB dan lanjut ke judul berikutnya
+                            }
+                        }
+                    }
+                } catch (aiError) {
+                    console.error("Gemini Error:", aiError);
+                    showNotification('Gagal menggunakan AI (server penuh/gangguan). Menggunakan pencarian standar...');
+                }
+            }
+
+            // Fallback: Jika AI gagal, tidak ada API Gemini, atau tidak ada keyword
+            if (finalMovies.length === 0) {
+                const url = await getSmartUrl(tmdbKey, searchKeyword);
+                const res = await fetchWithBackoff(url);
+                const data = await res.json();
+
+                if (data.status_code === 7 || data.success === false) {
+                    showNotification('API Key TMDB tidak valid atau kadaluarsa.');
+                    DOM.wall.innerHTML = '<div class="message error">Gagal memuat. Periksa API Key TMDB Anda.</div>';
+                    return;
+                }
+                finalMovies = data.results.filter(item => item.poster_path);
+            }
+
+            if (finalMovies.length === 0) {
+                DOM.wall.innerHTML = `<div class="message error">Tidak ada poster ditemukan untuk "${searchKeyword}".</div>`;
                 return;
             }
 
             DOM.wall.innerHTML = ''; // Bersihkan dinding
             
-            // Filter data agar hanya mengambil hasil yang memiliki gambar poster
-            const movies = data.results.filter(item => item.poster_path);
-
-            if (movies.length === 0) {
-                DOM.wall.innerHTML = `<div class="message error">Tidak ada poster ditemukan untuk keyword "${searchKeyword}".</div>`;
-                return;
-            }
-
-            const count = parseInt(DOM.posterCount.value);
             const width = DOM.posterWidth.value;
             const height = width * DOM.posterRatio.value;
 
-            // Jika jumlah yang diminta lebih banyak dari 20 (batas 1 halaman API), kita loop datanya
+            // Jika jumlah yang diminta lebih banyak dari hasil, kita loop datanya
             const displayMovies = [];
             for(let i=0; i < count; i++) {
-                displayMovies.push(movies[i % movies.length]);
+                displayMovies.push(finalMovies[i % finalMovies.length]);
             }
 
             // Membuat elemen gambar untuk setiap film
-            displayMovies.forEach((movie, index) => {
+            displayMovies.forEach((movie) => {
                 if (movie.poster_path) {
                     const img = document.createElement('img');
-                    img.crossOrigin = 'anonymous'; // FIX: Menambahkan Cross-Origin untuk menghindari error tainted canvas saat export
+                    img.crossOrigin = 'anonymous'; 
                     img.src = `https://image.tmdb.org/t/p/w500${movie.poster_path}`;
                     img.className = 'poster';
                     img.style.width = `${width}px`;
                     img.style.height = `${height}px`;
-                    img.alt = movie.title || movie.name; // Mendukung series yang memakai "name" alih-alih "title"
+                    img.alt = movie.title || movie.name; 
                     img.title = movie.title || movie.name;
                     DOM.wall.appendChild(img);
                 }
@@ -353,8 +470,8 @@
 
         } catch (err) {
             console.error(err);
-            showNotification('Gagal mengambil data. Pastikan internet lancar.');
-            DOM.wall.innerHTML = '<div class="message error">Terjadi kesalahan saat memuat data.</div>';
+            showNotification('Gagal memproses data. Terjadi gangguan koneksi atau server.');
+            DOM.wall.innerHTML = '<div class="message error">Terjadi kesalahan saat memuat data. Silakan coba lagi nanti.</div>';
         }
     });
 
@@ -362,37 +479,32 @@
     DOM.exportBtn.addEventListener('click', async () => {
         showNotification('Memproses gambar HD (1920x1080), mohon tunggu...');
         
-        // Simpan styling asli
         const originalWidth = DOM.scene.style.width;
         const originalHeight = DOM.scene.style.height;
         const originalPadding = DOM.scene.style.paddingLeft;
         
-        // Setup ukuran scene sementara menjadi persis 1920x1080 (Landscape)
         DOM.scene.style.width = '1920px';
         DOM.scene.style.height = '1080px';
-        DOM.scene.style.paddingLeft = '0'; // Hilangkan jarak menu kontrol
+        DOM.scene.style.paddingLeft = '0'; 
         DOM.scene.style.minHeight = 'unset';
 
         try {
-            // Render elemen scene 3D menjadi gambar format JPEG
             const dataUrl = await htmlToImage.toJpeg(DOM.scene, { 
                 quality: 0.95,
                 width: 1920,
                 height: 1080,
                 backgroundColor: '#050505',
                 style: { transform: 'scale(1)' },
-                pixelRatio: 1 // FIX: Memastikan rasio pixel tepat agar ukurannya tidak berubah di layar beresolusi tinggi (Retina)
+                pixelRatio: 1 
             });
 
-            // Kembalikan ke styling asli
             DOM.scene.style.width = originalWidth;
             DOM.scene.style.height = originalHeight;
             DOM.scene.style.paddingLeft = originalPadding;
             DOM.scene.style.minHeight = '100vh';
 
-            // Trigger file download
             const link = document.createElement('a');
-            link.download = `CineWall-${DOM.keyword.value || 'Popular'}.jpg`;
+            link.download = `CineWall-${DOM.keyword.value || 'AI-Generated'}.jpg`;
             link.href = dataUrl;
             link.click();
             
@@ -401,7 +513,6 @@
             console.error('Error saat export:', error);
             showNotification('Gagal mengexport gambar. Pastikan gambar sudah dimuat sepenuhnya.');
             
-            // Pastikan styling dikembalikan meski terjadi error
             DOM.scene.style.width = originalWidth;
             DOM.scene.style.height = originalHeight;
             DOM.scene.style.paddingLeft = originalPadding;
